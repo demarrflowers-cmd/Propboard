@@ -24,12 +24,17 @@ const DEFAULT_MARKETS = { basketball_nba: ["player_points", "player_rebounds", "
 // Up to 10 named books cost the same as one region, so we ask for these by name.
 const SHARP_BOOKS = ["pinnacle", "fanduel", "draftkings", "betmgm", "williamhill_us", "betrivers", "betonlineag", "bovada"];
 const PICKEM_BOOKS = ["prizepicks", "underdog"];
+// The odds service still calls Caesars by its old name, William Hill.
+const BOOK_NAMES = { williamhill_us: "Caesars", fanduel: "FanDuel", draftkings: "DraftKings", betmgm: "BetMGM", betrivers: "BetRivers",
+  pinnacle: "Pinnacle", betonlineag: "BetOnline", bovada: "Bovada", prizepicks: "PrizePicks", underdog: "Underdog" };
+const PARLAY_BOOKS = ["williamhill_us", "fanduel", "draftkings", "betmgm", "betrivers"];
+const bookName = (k, t) => BOOK_NAMES[k] || t || k;
 const WEIGHT = { pinnacle: 3, betonlineag: 1.5, fanduel: 1.5, draftkings: 1.2 };
 const isDfs = k => PICKEM_BOOKS.includes(k) || /dfs|pick6|sleeper|betr/i.test(k);
 
 S.picks = Object.assign({ sport: "basketball_nba", markets: null, dfs: true, books: true, legs: 3, mode: "pickem",
   payouts: { 2: 3, 3: 5, 4: 10, 5: 20 }, flex: { 3: [2.25, 1.25], 4: [5, 1.5], 5: [10, 2, 0.4] },
-  games: [], app: "all", minBooks: 2, mine: [] }, S.picks || {});
+  games: [], app: "all", minBooks: 2, mine: [], book: "best" }, S.picks || {});
 if (!S.picks.markets) S.picks.markets = DEFAULT_MARKETS[S.picks.sport].slice();
 if (!S.picks.flex) S.picks.flex = { 3: [2.25, 1.25], 4: [5, 1.5], 5: [10, 2, 0.4] };
 if (!S.picks.mine) S.picks.mine = [];
@@ -101,7 +106,7 @@ async function loadLines() {
       if (o.point == null || !o.description) continue;
       const k = [ev.id, mk.key, o.description, o.point].join("|");
       const row = rows[k] || (rows[k] = { k, eventId: ev.id, game, market: mk.key, player: o.description, line: o.point, books: {} });
-      const b = row.books[bk.key] || (row.books[bk.key] = { title: bk.title, dfs: isDfs(bk.key) });
+      const b = row.books[bk.key] || (row.books[bk.key] = { title: bookName(bk.key, bk.title), dfs: isDfs(bk.key) });
       const side = /^over$/i.test(o.name) ? "over" : /^under$/i.test(o.name) ? "under" : null;
       if (side) b[side] = o.price;
     }
@@ -161,6 +166,19 @@ function pickemPool() {
     (S.picks.app === "all" || c.apps.some(a => a.key === S.picks.app)));
 }
 
+/* Price a leg at the chosen sportsbook, or at the best price anywhere. */
+function withBook(c) {
+  if (S.picks.book === "best") return c.best ? c : null;
+  const b = c.r.books[S.picks.book];
+  if (!b || b[c.side] == null) return null;
+  const odds = b[c.side];
+  return { ...c, best: { key: S.picks.book, title: b.title, odds }, bookEV: c.pm * dec(odds) - 1 };
+}
+function bookChips() {
+  const opts = [["best", "Best price"], ...PARLAY_BOOKS.map(k => [k, BOOK_NAMES[k]])];
+  return `<div class="chips" style="margin:10px 0 0" role="group" aria-label="Sportsbook">${opts.map(([k, t]) => `<button class="chip" data-book="${k}" aria-pressed="${S.picks.book === k}">${t}</button>`).join("")}</div>`;
+}
+
 /* Check every combination of the strongest legs and keep the best few. */
 function combos(pool, n, scoreFn, keep) {
   const top = [];
@@ -195,7 +213,7 @@ function bestSlips() {
   }
   const byBook = {};
   for (const c of candidates()) for (const [key, b] of Object.entries(c.r.books))
-    if (!b.dfs && b[c.side] != null && c.r.nBooks >= S.picks.minBooks) (byBook[key] ||= { title: b.title, list: [] }).list.push({ ...c, odds: b[c.side] });
+    if (!b.dfs && b[c.side] != null && c.r.nBooks >= S.picks.minBooks && (S.picks.book === "best" || S.picks.book === key)) (byBook[key] ||= { title: b.title, list: [] }).list.push({ ...c, odds: b[c.side] });
   let all = [];
   for (const bk of Object.values(byBook)) {
     const pool = bk.list.map(c => ({ ...c, ev1: c.pm * dec(c.odds) - 1 })).sort((a, b) => b.ev1 - a.ev1).slice(0, POOL_SIZE[n]);
@@ -281,6 +299,7 @@ function bestHTML() {
     <div class="row"><h2 style="margin:0">Best ${n}-pick</h2><span class="badge">${pk ? "Pick'em" : "Parlay"}</span></div>
     <div class="seg" style="margin-top:10px" role="group" aria-label="Number of picks">${[2, 3, 4, 5].map(k => `<button data-legs="${k}" aria-pressed="${k === n}">${k} picks</button>`).join("")}</div>
     <div class="seg" style="margin-top:8px" role="group" aria-label="Slip type"><button data-pmode="pickem" aria-pressed="${pk}">PrizePicks / Underdog</button><button data-pmode="book" aria-pressed="${!pk}">Sportsbook parlay</button></div>
+    ${pk ? "" : bookChips()}
     ${pk ? `<p class="note" style="margin:10px 0 0">A ${n}-pick Power at ${powerMult(n)}× needs each leg to win <b>${pct(breakEven(n))}</b> to break even. Edge is how far a leg beats that.</p>` : ""}`;
   if (!slips.length) {
     const why = pk && L.rows.every(r => !Object.values(r.books).some(b => b.dfs)) ? "No PrizePicks or Underdog lines came back for these games. Turn on PrizePicks / Underdog and load again, or switch to Sportsbook parlay." : `Not enough strong legs from different players to build ${n} picks. Load more games or stat types, or lower “Books needed” in Settings.`;
@@ -309,14 +328,14 @@ function edgeHTML() {
       <div class="note">Win <b>${pct(c.pm)}</b> · edge <b class="${edge > 0 ? "hot" : "cold"}">${sgn(edge)}</b>${c.r.sharp != null ? ` · Pinnacle ${pct(c.side === "over" ? c.r.sharp : 1 - c.r.sharp)}` : ""}${l10Text(c)} · ${c.r.nBooks} books</div></div>
       <button class="x" data-mine="${esc(c.id)}" aria-pressed="${S.picks.mine.includes(c.id)}" aria-label="Add to your picks">${S.picks.mine.includes(c.id) ? "✓" : "+"}</button></div>`);
   } else {
-    list = candidates().filter(c => c.best && c.r.nBooks >= S.picks.minBooks).sort((a, b) => b.bookEV - a.bookEV).slice(0, 40);
+    list = candidates().map(c => withBook(c)).filter(c => c && c.r.nBooks >= S.picks.minBooks).sort((a, b) => b.bookEV - a.bookEV).slice(0, 40);
     rows = list.map(c => `<div class="leg"><div style="min-width:0"><b>${esc(c.r.player)}</b><div class="note">${legText(c)} · ${esc(c.r.game)}</div>
-      <div class="note">Win <b>${pct(c.pm)}</b> · best <b>${fmtO(c.best.odds)}</b> ${esc(c.best.title)} · edge <b class="${c.bookEV > 0 ? "hot" : "cold"}">${sgn(c.bookEV)}</b>${l10Text(c)}</div></div>
+      <div class="note">Win <b>${pct(c.pm)}</b> · ${S.picks.book === "best" ? "best " : ""}<b>${fmtO(c.best.odds)}</b> ${esc(c.best.title)} · edge <b class="${c.bookEV > 0 ? "hot" : "cold"}">${sgn(c.bookEV)}</b>${l10Text(c)}</div></div>
       <button class="x" data-top="${esc(c.id)}" aria-label="Add to slip">+</button></div>`);
   }
   const apps = pk ? `<div class="chips" style="margin:8px 0 4px">${[["all", "All apps"], ["prizepicks", "PrizePicks"], ["underdog", "Underdog"]].map(([k, t]) => `<button class="chip" data-app="${k}" aria-pressed="${S.picks.app === k}">${t}</button>`).join("")}</div>` : "";
   return `<div class="card"><h2 style="margin:0">Edge finder</h2>
-    <p class="note" style="margin:4px 0 0">${pk ? `Every pick'em line, ranked by how far its win chance beats the ${pct(be)} a ${n}-pick needs. The yellow tick is break-even. Tap + to build your own slip.` : "Single bets where the best price pays more than the fair chance says it should."}</p>
+    <p class="note" style="margin:4px 0 0">${pk ? `Every pick'em line, ranked by how far its win chance beats the ${pct(be)} a ${n}-pick needs. The yellow tick is break-even. Tap + to build your own slip.` : S.picks.book === "best" ? "Single bets ranked by edge at the best price across all books. Green means it pays more than its fair chance." : `Single bets at ${BOOK_NAMES[S.picks.book]}, ranked by edge. Green means it pays more than its fair chance.`}</p>
     ${apps}${rows.length ? rows.join("") : '<p class="note" style="margin-top:10px">Nothing with an edge right now. Try more games or stat types.</p>'}</div>`;
 }
 function settingsHTML() {
@@ -382,6 +401,7 @@ $("#picksView").addEventListener("click", e => {
   if (t.id === "tDfs") { S.picks.dfs = !S.picks.dfs; save(); renderPicks(); return; }
   const lg = t.closest("[data-legs]"); if (lg) { S.picks.legs = +lg.dataset.legs; save(); renderPicks(); return; }
   const pm = t.closest("[data-pmode]"); if (pm) { S.picks.mode = pm.dataset.pmode; save(); renderPicks(); return; }
+  const bkc = t.closest("[data-book]"); if (bkc) { S.picks.book = bkc.dataset.book; save(); renderPicks(); return; }
   const ap = t.closest("[data-app]"); if (ap) { S.picks.app = ap.dataset.app; save(); renderPicks(); return; }
   const si = t.closest("[data-slipit]"); if (si) {
     const s = (window._slips || [])[+si.dataset.slipit]; if (!s) return;
@@ -402,7 +422,7 @@ $("#picksView").addEventListener("click", e => {
   const um = t.closest("[data-unmine]"); if (um) { S.picks.mine = S.picks.mine.filter(x => x !== um.dataset.unmine); save(); renderPicks(); return; }
   if (t.id === "clearMine") { S.picks.mine = []; save(); renderPicks(); return; }
   if (t.id === "mineToSlip") { const all = candidates(); S.slip = []; S.picks.mine.forEach(id => { const c = all.find(x => x.id === id); if (c) addToSlip(c); }); save(); render(); toast("Added to your slip"); return; }
-  const tp = t.closest("[data-top]"); if (tp) { const c = candidates().find(x => x.id === tp.dataset.top); if (c) { addToSlip(c, c.best && c.best.odds); save(); render(); toast("Added to slip"); } }
+  const tp = t.closest("[data-top]"); if (tp) { const c = withBook(candidates().find(x => x.id === tp.dataset.top) || {}); if (c) { addToSlip(c, c.best && c.best.odds); save(); render(); toast("Added to slip"); } }
 });
 $("#picksView").addEventListener("change", e => {
   const t = e.target;
@@ -413,5 +433,5 @@ $("#picksView").addEventListener("change", e => {
   else if (/^pay\d$/.test(t.id)) { const v = parseFloat(t.value); if (v > 0) { S.picks.payouts[t.id.slice(3)] = v; save(); renderPicks(); } }
   else if (/^flex\d$/.test(t.id)) { const v = t.value.split(/[,\s]+/).map(Number).filter(x => isFinite(x) && x >= 0); if (v.length) { S.picks.flex[t.id.slice(4)] = v; save(); renderPicks(); } }
 });
-if (L) price(L);
+if (L) { L.rows.forEach(r => Object.entries(r.books).forEach(([k, b]) => { b.title = bookName(k, b.title); })); price(L); }
 renderPicks();
