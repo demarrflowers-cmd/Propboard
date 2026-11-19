@@ -92,7 +92,7 @@ const EXAMPLES = [
   { player: "Example · Center", team: "HOME", opp: "vs AWAY", stat: "REB", line: 11.5, over: -120, under: 100, log: [13,9,12,14,10,15,11,12,13,9] },
   { player: "Example · Forward", team: "AWAY", opp: "@ HOME", stat: "PRA", line: 38.5, over: -110, under: -110, log: [35,41,37,44,33,39,36,42,40,35] },
 ];
-let S = { props: [], slip: [], mode: "parlay", stake: 10, filter: "All", view: "board", open: null, lastSync: 0, started: false };
+let S = { props: [], slip: [], mode: "parlay", stake: 10, filter: "All", view: "picks", open: null, lastSync: 0, started: false };
 try { const raw = localStorage.getItem(KEY); if (raw) Object.assign(S, JSON.parse(raw)); } catch (e) {}
 if (!S.started) { S.props = EXAMPLES.map((p, i) => ({ ...p, id: "ex" + i })); S.started = true; }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -304,12 +304,12 @@ function calc() {
 function show(v) {
   S.view = v; save();
   document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.v === v));
-  ["board", "slip", "live", "calc"].forEach(x => ($("#v-" + x).hidden = x !== v));
-  $("#hdrSub").textContent = { board: "Player props", slip: "Your picks", live: "In-game", calc: "Tools" }[v];
+  ["picks", "board", "slip", "live", "calc"].forEach(x => ($("#v-" + x).hidden = x !== v));
+  $("#hdrSub").textContent = { picks: "Best slips", board: "Player props", slip: "Your picks", live: "In-game", calc: "Tools" }[v];
   render(); window.scrollTo(0, 0);
   if (v === "live") startLive(); else stopLive();
 }
-function render() { renderBoard(); renderSlip(); renderLive(); calc(); }
+function render() { renderBoard(); renderSlip(); renderLive(); calc(); if (typeof renderPicks === "function") renderPicks(); }
 
 document.querySelector("nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) show(b.dataset.v); });
 $("#statChips").addEventListener("click", e => { const b = e.target.closest("[data-f]"); if (b) { S.filter = b.dataset.f; save(); renderBoard(); } });
@@ -421,6 +421,6 @@ $("#propForm").addEventListener("submit", e => {
 });
 
 /* ---------- Start ---------- */
-show(S.view || "board");
+show(S.view || "picks");
 if (S.lastSync) $("#syncNote").textContent = `Updated ${new Date(S.lastSync).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
 if (Date.now() - (S.lastSync || 0) > 3 * 3600 * 1000) syncStats(false);
